@@ -2,6 +2,38 @@
 
 Apply programmatic edits to a Microsoft Word document **while it's open**, rendered live and recorded as **tracked changes** attributed to the Word user.
 
+## Use case — let Claude and Codex co-edit your Word documents
+
+Word Bridge turns Word into a shared surface where **you and one or more AI assistants (Claude, Codex / GPT, or any tool-using LLM) can co-edit the same document at the same time**. You keep Word open and see every change land live in the page; the AI gets a stable, programmatic interface to the document without any copy-paste loop.
+
+Concrete flows this unlocks:
+
+- **Track-changes collaboration with Claude or Codex.** Ask the assistant to revise a paragraph, fix citations, tighten the abstract, or rewrite a section. Every edit shows up as a tracked insertion/deletion attributed to *you* (Word's user identity), so you can accept/reject each change from Word's Review ribbon exactly like a human collaborator's edits.
+- **Co-pilot for long-form writing.** Draft in Word while Claude watches the structure via `getParagraphs` / `getOoxml` and suggests or applies edits to specific anchors you call out ("fix the methods section", "renumber references"). No context switching into a chat window.
+- **LLM-to-LLM pipelines.** Because the bridge exposes its tool catalog at `GET /tools` in JSON Schema, Claude, Codex, and MCP clients can all talk to the same document simultaneously — one handling citations, another handling prose — without stomping each other, as long as you serialize their ops through the HTTP endpoint.
+- **Scripted, auditable revisions.** Run a CLI or a `.json` batch of ops (`wordbridge ops-file edits.json`) to apply a reviewed set of changes in one pass, and use tracked changes as the audit log.
+- **Review automation.** Let an assistant enumerate tracked changes (`getTrackedChanges`) and selectively `accept`/`reject` them by text, paragraph, or author — useful when you have a PR-style review loop on a doc.
+
+The add-in and bridge are **platform-agnostic** to the caller: anything that can POST JSON to `http://127.0.0.1:3001/op` can drive Word.
+
+### Pointing an LLM at this project
+
+[`SKILL.md`](./SKILL.md) is a self-contained, skill-format instruction file that teaches any tool-using LLM (Claude Code, Codex, MCP clients, custom agents) how to install, run, and drive Word Bridge end-to-end. **Load it directly into the model's context** and the LLM gets:
+
+- setup + install steps (clone, `npm install`, sideload the manifest, start the bridge),
+- how to discover the op catalog at `GET /tools`,
+- how to scout a document safely before editing,
+- when to use each op (findReplace, insertAfterText, replaceParagraphByIndex, insertImage, insertOoxml, reviewChanges, …),
+- hard rules to avoid corrupting tracked changes or stomping on other agents editing the same doc.
+
+Ways to load it:
+
+- **Claude Code**: drop `SKILL.md` into `~/.claude/skills/wordbridge/SKILL.md` (or the project-local `.claude/skills/` folder), and Claude will auto-trigger it when you ask it to edit a Word document.
+- **Codex / GPT / MCP clients**: paste or include the contents of `SKILL.md` as a system/developer message, or have the agent fetch the raw file from the repo at session start.
+- **Any agent**: `curl https://raw.githubusercontent.com/<your-fork>/wordbridge/main/SKILL.md` and inject the text into the model's prompt.
+
+Once loaded, the LLM can call `GET http://127.0.0.1:3001/tools` at runtime for the live, version-accurate op schemas — the skill file tells it how, so it never needs to hard-code them.
+
 ## Architecture
 
 ```
@@ -24,42 +56,65 @@ Apply programmatic edits to a Microsoft Word document **while it's open**, rende
 
 ## One-time setup
 
+Works on **macOS** and **Windows**. Requires Node 18+ and Microsoft Word (desktop, 2016 or later).
+
 1. Install deps:
    ```bash
-   cd ~/wordbridge && npm install
+   cd wordbridge && npm install
    ```
-2. Sideload the manifest into Word's developer folder:
+2. Sideload the manifest into Word:
+
+   **macOS** — drop the manifest into Word's developer folder:
    ```bash
    cp ~/wordbridge/addin/manifest.xml \
       ~/Library/Containers/com.microsoft.Word/Data/Documents/wef/wordbridge.manifest.xml
    ```
-3. **Fully quit Word** (⌘Q — not just close windows) before the next launch, otherwise Word won't pick up the new manifest.
+
+   **Windows** — Word uses a *trusted shared folder catalog* instead of a per-app `wef/` folder:
+   1. Create a folder anywhere, e.g. `C:\wordbridge-manifests\`, and copy `addin\manifest.xml` into it.
+   2. In Word, **File → Options → Trust Center → Trust Center Settings → Trusted Add-in Catalogs**.
+   3. Paste the folder path (e.g. `C:\wordbridge-manifests\`) into the **Catalog Url** box, click **Add catalog**, tick **Show in Menu**, click **OK**.
+   4. Close and reopen Word.
+3. **Fully quit Word before the next launch** — on macOS ⌘Q (not just close windows); on Windows right-click the taskbar icon → Close all windows, or `taskkill /f /im WINWORD.EXE` if it's stuck. Otherwise Word won't re-scan the manifest.
 
 ## Every session
 
 1. Start the bridge:
    ```bash
+   # macOS / Linux
    node ~/wordbridge/server/server.js
-   # or on a different port:
    node ~/wordbridge/server/server.js --port 4000
-   # or via env var:
    WORDBRIDGE_PORT=4000 node ~/wordbridge/server/server.js
    ```
+   ```powershell
+   # Windows (PowerShell)
+   node C:\path\to\wordbridge\server\server.js
+   node C:\path\to\wordbridge\server\server.js --port 4000
+   $env:WORDBRIDGE_PORT=4000; node C:\path\to\wordbridge\server\server.js
+   ```
 2. Open your `.docx` in Word.
-3. **Insert → Add-ins → My Add-ins → Developer Add-ins → Word Bridge.** The task pane opens on the right.
+3. Open the task pane:
+   - **macOS**: **Insert → Add-ins → My Add-ins → Developer Add-ins → Word Bridge.**
+   - **Windows**: **Insert → My Add-ins → Shared Folder → Word Bridge.**
+
+   The task pane opens on the right.
 4. The task pane shows `Bridge: connected` when the WebSocket is up.
-5. **Enable Track Changes manually**: **Review → Track Changes → For Everyone**. The Office.js setter for `changeTrackingMode` is broken on Word for Mac (see *Known bugs*), so the add-in cannot toggle this for you.
-6. Set your author identity: **Word → Preferences → User Information**. Every tracked change will be attributed to this name.
+5. **Enable Track Changes manually**: **Review → Track Changes → For Everyone** (Mac) / **Review → Track Changes** (Windows). The Office.js setter for `changeTrackingMode` is broken on Word for Mac (see *Known bugs*), so the add-in cannot toggle this for you on Mac. On Windows the underlying API works, but the add-in currently treats both platforms the same and expects you to toggle manually.
+6. Set your author identity — every tracked change is attributed to this name:
+   - **macOS**: **Word → Preferences → User Information**
+   - **Windows**: **File → Options → General → Personalize your copy of Microsoft Office**
 
 ## Changing the port
 
 The bridge, CLI, and task pane all accept a custom port. Changing the port that the **task pane is loaded from** requires updating the manifest and relaunching Word, because Word bakes the task-pane URL at launch time.
 
 ```bash
-# 1. rewrite manifest + reinstall to wef/
+# 1. rewrite the manifest (and, on macOS, auto-reinstall it to wef/)
 node ~/wordbridge/tools/set-port.js 4000
+# On Windows: also manually copy addin\manifest.xml back into your
+# trusted-catalog folder (e.g. C:\wordbridge-manifests\manifest.xml).
 
-# 2. fully quit Word (⌘Q)
+# 2. fully quit Word (⌘Q on Mac, close all Word windows on Windows)
 
 # 3. start bridge on the new port
 node ~/wordbridge/server/server.js --port 4000
@@ -67,6 +122,8 @@ node ~/wordbridge/server/server.js --port 4000
 # 4. reopen the doc, reopen the Word Bridge task pane
 # 5. CLI now needs --port 4000 or WORDBRIDGE_PORT=4000
 ```
+
+Note: `tools/set-port.js` currently auto-installs to Word's macOS `wef/` folder only. On Windows it still rewrites `addin/manifest.xml`, but you need to copy the updated manifest into your trusted-catalog folder yourself.
 
 Once the task pane is loaded, it reads its own `window.location.host` to build the WebSocket URL, so it always connects to the bridge it was served from. No client-side config.
 
@@ -124,7 +181,7 @@ node ~/wordbridge/cli/wordbridge.js ops-file edits.json --stopOnError
 node ~/wordbridge/cli/wordbridge.js raw '{"kind":"insertOoxml","anchor":"Conclusion","ooxml":"<w:p .../>","location":"after"}'
 ```
 
-Put `~/wordbridge/cli` on your `PATH` (or symlink `wordbridge.js` into `/usr/local/bin/wordbridge`) to drop the `node …` prefix.
+Put `~/wordbridge/cli` on your `PATH` (or symlink `wordbridge.js` into `/usr/local/bin/wordbridge`) to drop the `node …` prefix. On Windows, add `C:\path\to\wordbridge\cli` to `PATH` and invoke it as `node wordbridge.js …`, or create a `wordbridge.cmd` wrapper.
 
 ## Supported ops
 
@@ -147,24 +204,28 @@ Text edits are recorded as tracked changes **if** Track Changes is enabled in Wo
 
 ## Known bugs (upstream, not this project)
 
-`Word.Document.changeTrackingMode` is spec'd in `WordApi 1.4` but is non-functional on Word for Mac as of February 2026:
+`Word.Document.changeTrackingMode` is spec'd in `WordApi 1.4` but is non-functional on Word for Mac as of February 2026. Windows is partially fixed:
 
-- [office-js#2797](https://github.com/OfficeDev/office-js/issues/2797) — `PropertyNotLoaded` on read, fixed on Windows, not Mac.
+- [office-js#2797](https://github.com/OfficeDev/office-js/issues/2797) — `PropertyNotLoaded` on read; **fixed on Windows**, still broken on Mac.
 - [office-js#6246](https://github.com/officedev/office-js/issues/6246) — cross-platform "retrieve the markup revision mode" gap, open.
-- [office-js#6514](https://github.com/OfficeDev/office-js/issues/6514) — `getTrackedChanges()` hangs silently on Word for Mac 16.106, open.
+- [office-js#6514](https://github.com/OfficeDev/office-js/issues/6514) — `getTrackedChanges()` hangs silently on Word for Mac 16.106, open. Does not reproduce on Windows as of this writing.
 
-The add-in catches these gracefully and degrades to manual-mode.
+The add-in catches these gracefully and degrades to manual-mode on both platforms.
 
 ## Troubleshooting
 
-- **Task pane doesn't list the add-in.** You didn't fully quit Word before launching after the manifest was installed. ⌘Q, then reopen.
-- **Task pane is blank.** Word's webview refused `http://127.0.0.1`. Switch to HTTPS with a self-signed cert (not shipped yet in this scaffold).
+- **Task pane doesn't list the add-in.** You didn't fully quit Word before launching after the manifest was installed. ⌘Q (Mac) / close all Word windows (Windows), then reopen. On Windows, also confirm the trusted catalog folder is registered in **File → Options → Trust Center → Trusted Add-in Catalogs** with **Show in Menu** ticked.
+- **Task pane is blank.** Word's webview refused `http://127.0.0.1`. Switch to HTTPS with a self-signed cert (not shipped yet in this scaffold). Windows is stricter than Mac here — loopback HTTP may be blocked entirely depending on Edge WebView2 policy.
 - **`no add-in connected`.** The task pane isn't open, or its WebSocket disconnected (check the pill in the task pane).
-- **Author on tracked changes is wrong.** The add-in uses whoever is signed into Word. Set your name in **Word → Preferences → User Information** *before* opening the document.
+- **Author on tracked changes is wrong.** The add-in uses whoever is signed into Word. Set your name in **Word → Preferences → User Information** (Mac) or **File → Options → General** (Windows) *before* opening the document.
 - **Edits don't appear as tracked.** Check that the Review ribbon shows Track Changes toggled on for this document.
 - **Anchor not found.** `insertAfterText` / `setParagraphStyle` use exact string search. Shorten the anchor to a unique snippet.
-- **`get-tracked-changes` times out.** Known Mac Word.js bug (#6514). Increase `--timeout` or accept that you can't enumerate changes on this build.
-- **Bridge port in use.** Another process is on `3001`. Either kill it (`lsof -ti :3001 | xargs kill`) or start the bridge on a different port with `--port`.
+- **`get-tracked-changes` times out.** Known Mac Word.js bug (#6514). Increase `--timeout` or accept that you can't enumerate changes on this build. Should work on Windows.
+- **Bridge port in use.**
+  - macOS / Linux: `lsof -ti :3001 | xargs kill`
+  - Windows (PowerShell): `Get-NetTCPConnection -LocalPort 3001 | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }`
+
+  Or start the bridge on a different port with `--port`.
 
 ## What this can't do (limitations)
 
