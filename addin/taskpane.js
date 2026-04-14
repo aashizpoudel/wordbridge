@@ -267,6 +267,60 @@ async function applyOp(op) {
           truncated: value.length > charLimit,
         };
       }
+      case "insertImage": {
+        // Insert an inline picture at/around an anchor.
+        //   anchor: text to search for
+        //   base64: image bytes, base64-encoded (PNG/JPEG)
+        //   location: "after" | "before" | "replace" (default "after")
+        //     - "after"/"before" insert a new paragraph next to the anchor's paragraph
+        //       and place the picture inside it
+        //     - "replace" replaces the anchor text itself with the picture inline
+        //   widthPoints?: if set, resize the picture width (height scales proportionally)
+        //   alignment?: "left"|"center"|"right" applied to the containing paragraph
+        const { anchor, base64, location = "after", widthPoints, alignment } = op;
+        if (!anchor) throw new Error("insertImage: anchor required");
+        if (!base64) throw new Error("insertImage: base64 required");
+
+        const results = context.document.body.search(anchor, { matchCase: true });
+        results.load("items");
+        await context.sync();
+        if (results.items.length === 0) throw new Error(`anchor not found: ${anchor}`);
+        const target = results.items[0];
+
+        let picture;
+        if (location === "replace") {
+          picture = target.insertInlinePictureFromBase64(base64, Word.InsertLocation.replace);
+        } else {
+          const parent = target.paragraphs.getFirst();
+          const loc = location === "before" ? Word.InsertLocation.before : Word.InsertLocation.after;
+          const newPara = parent.insertParagraph("", loc);
+          if (alignment === "left") newPara.alignment = Word.Alignment.left;
+          else if (alignment === "right") newPara.alignment = Word.Alignment.right;
+          else newPara.alignment = Word.Alignment.centered;
+          picture = newPara.insertInlinePictureFromBase64(base64, Word.InsertLocation.start);
+        }
+        if (widthPoints && Number.isFinite(widthPoints)) {
+          picture.width = Number(widthPoints);
+        }
+        await context.sync();
+        return { ok: true, widthPoints: widthPoints ?? null, location };
+      }
+      case "replaceParagraphByIndex": {
+        // Replace the entire content of a paragraph identified by its index
+        // in body.paragraphs. Preserves paragraph style and properties; clears
+        // inline math, fields, tracked-change markers, etc. inside the paragraph.
+        const { index, newText } = op;
+        const paragraphs = context.document.body.paragraphs;
+        paragraphs.load("items");
+        await context.sync();
+        if (index < 0 || index >= paragraphs.items.length) {
+          throw new Error(`paragraph index out of range: ${index} (total: ${paragraphs.items.length})`);
+        }
+        const p = paragraphs.items[index];
+        p.getRange().insertText(newText, Word.InsertLocation.replace);
+        await context.sync();
+        return { index, totalParagraphs: paragraphs.items.length };
+      }
       case "getTrackedChanges": {
         const { timeoutMs = 3000, textLimit = 200 } = op;
         const inner = (async () => {
@@ -288,6 +342,86 @@ async function applyOp(op) {
         );
         const changes = await Promise.race([inner, timeout]);
         return { count: changes.length, changes };
+      }
+      case "reviewChanges": {
+        // Unified accept/reject with multiple selector strategies.
+        //   action: "accept" | "reject"
+        //   selector:
+        //     { kind: "all" }                                  — every change in body
+        //     { kind: "index", value: N }                      — Nth change (0-based) in body
+        //     { kind: "text", value: "...", matchCase?: bool }  — changes whose text contains substring
+        //     { kind: "paragraph", anchor: "..." }             — changes inside the paragraph containing anchor
+        //   authorFilter?: "name"                              — further narrow to one author
+        //   timeoutMs?: default 15000
+        //   maxMatches?: 0 for all
+        const { action, selector, authorFilter, timeoutMs = 15000, maxMatches = 0 } = op;
+        if (action !== "accept" && action !== "reject") throw new Error(`bad action: ${action}`);
+        const doAction = (change) => action === "accept" ? change.accept() : change.reject();
+
+        const inner = (async () => {
+          let source, sourceScope;
+          if (selector?.kind === "paragraph") {
+            const anchor = selector.anchor;
+            if (!anchor) throw new Error("selector paragraph requires anchor");
+            const results = context.document.body.search(anchor, { matchCase: true });
+            results.load("items");
+            await context.sync();
+            if (results.items.length === 0) throw new Error(`anchor not found: ${anchor}`);
+            const para = results.items[0].paragraphs.getFirst();
+            source = para.getRange().getTrackedChanges();
+            sourceScope = "paragraph";
+          } else {
+            source = context.document.body.getTrackedChanges();
+            sourceScope = "body";
+          }
+          source.load(["items/author", "items/type", "items/text"]);
+          await context.sync();
+
+          const all = source.items || [];
+          const candidates = [];
+          if (!selector || selector.kind === "all" || selector.kind === "paragraph") {
+            for (const c of all) candidates.push(c);
+          } else if (selector.kind === "index") {
+            const i = Number(selector.value);
+            if (i < 0 || i >= all.length) {
+              throw new Error(`index out of range: ${i} (found ${all.length} changes in ${sourceScope})`);
+            }
+            candidates.push(all[i]);
+          } else if (selector.kind === "text") {
+            const needle = String(selector.value);
+            const caseSensitive = !!selector.matchCase;
+            const hay = caseSensitive ? (t => t) : (t => (t || "").toLowerCase());
+            const n2 = caseSensitive ? needle : needle.toLowerCase();
+            for (const c of all) {
+              if ((hay(c.text) || "").includes(n2)) candidates.push(c);
+            }
+          } else {
+            throw new Error(`unknown selector: ${selector.kind}`);
+          }
+
+          const filtered = authorFilter
+            ? candidates.filter((c) => c.author === authorFilter)
+            : candidates;
+          const toTouch = maxMatches > 0 ? filtered.slice(0, maxMatches) : filtered;
+          for (const c of toTouch) doAction(c);
+          await context.sync();
+
+          return {
+            scope: sourceScope,
+            totalInScope: all.length,
+            matched: filtered.length,
+            touched: toTouch.length,
+            action,
+          };
+        })();
+
+        const timeout = new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`reviewChanges timed out after ${timeoutMs}ms (known Mac Word.js bug — try --paragraph scope or accept manually)`)),
+            timeoutMs,
+          ),
+        );
+        return await Promise.race([inner, timeout]);
       }
       default:
         throw new Error(`unknown op: ${op.kind}`);

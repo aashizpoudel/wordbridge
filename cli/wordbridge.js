@@ -157,6 +157,69 @@ async function main() {
         console.log(JSON.stringify(r.json ?? r.text, null, 2));
         return;
       }
+      case "insert-image": {
+        // Usage: wordbridge insert-image "anchor" path/to/img.png [--location after|before|replace] [--width 450] [--align center]
+        const [anchor, imagePath] = pos;
+        if (!anchor || !imagePath) throw new Error("usage: wordbridge insert-image <anchor> <imagePath> [--location after|before|replace] [--width POINTS] [--align left|center|right]");
+        const fs = await import("node:fs/promises");
+        const bytes = await fs.readFile(imagePath);
+        const base64 = bytes.toString("base64");
+        const r = await sendOp({
+          kind: "insertImage",
+          anchor,
+          base64,
+          location: flags.location || "after",
+          widthPoints: flags.width ? Number(flags.width) : undefined,
+          alignment: flags.align || "center",
+        });
+        console.log(JSON.stringify(r.json ?? r.text, null, 2));
+        return;
+      }
+      case "replace-paragraph": {
+        const [index, newText] = pos;
+        if (index === undefined || newText === undefined) throw new Error("usage: wordbridge replace-paragraph <index> <newText>");
+        const r = await sendOp({ kind: "replaceParagraphByIndex", index: Number(index), newText });
+        console.log(JSON.stringify(r.json ?? r.text, null, 2));
+        return;
+      }
+      case "accept":
+      case "reject": {
+        // Usage:
+        //   wordbridge accept --all
+        //   wordbridge accept --index 3
+        //   wordbridge accept --text "Datasets"
+        //   wordbridge accept --paragraph "Materials and Methods"
+        //   wordbridge reject --text "foo" --author apoudel6 --max 1 --timeout 20000
+        let selector;
+        if (flags.all) selector = { kind: "all" };
+        else if (flags.index !== undefined) selector = { kind: "index", value: Number(flags.index) };
+        else if (flags.text) selector = { kind: "text", value: flags.text, matchCase: !!flags.case };
+        else if (flags.paragraph) selector = { kind: "paragraph", anchor: flags.paragraph };
+        else throw new Error(`usage: wordbridge ${cmd} <--all | --index N | --text STR | --paragraph ANCHOR> [--author X] [--max N] [--timeout MS]`);
+        const r = await sendOp({
+          kind: "reviewChanges",
+          action: cmd,
+          selector,
+          authorFilter: flags.author || undefined,
+          maxMatches: flags.max ? Number(flags.max) : 0,
+          timeoutMs: flags.timeout ? Number(flags.timeout) : 15000,
+        });
+        console.log(JSON.stringify(r.json ?? r.text, null, 2));
+        return;
+      }
+      // Legacy aliases
+      case "accept-all":
+      case "reject-all": {
+        const r = await sendOp({
+          kind: "reviewChanges",
+          action: cmd === "accept-all" ? "accept" : "reject",
+          selector: { kind: "all" },
+          authorFilter: flags.author || undefined,
+          timeoutMs: flags.timeout ? Number(flags.timeout) : 15000,
+        });
+        console.log(JSON.stringify(r.json ?? r.text, null, 2));
+        return;
+      }
       case "get-tracked-changes": {
         const r = await sendOp({
           kind: "getTrackedChanges",

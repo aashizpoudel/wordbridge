@@ -25,7 +25,7 @@ if (!Number.isInteger(PORT) || PORT <= 0 || PORT > 65535) {
 }
 
 const app = express();
-app.use(express.json({ limit: "4mb" }));
+app.use(express.json({ limit: "20mb" }));
 
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
