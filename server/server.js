@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { bridgeInfo, tools, getToolByName } from "./tools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ADDIN_DIR = path.resolve(__dirname, "..", "addin");
@@ -86,6 +87,41 @@ app.get("/status", (_req, res) => {
   res.json({ ok: true, connectedClients: clients.size, port: PORT });
 });
 
+app.get("/tools", (_req, res) => {
+  res.json({
+    ...bridgeInfo,
+    baseUrl: `http://127.0.0.1:${PORT}`,
+    toolCount: tools.length,
+    tools,
+  });
+});
+
+app.get("/tools/:name", (req, res) => {
+  const t = getToolByName(req.params.name);
+  if (!t) return res.status(404).json({ ok: false, error: `unknown tool: ${req.params.name}` });
+  res.json(t);
+});
+
+app.get("/", (_req, res) => {
+  res.type("text/plain").send(
+    [
+      `wordbridge ${bridgeInfo.version} — Word live-editing bridge`,
+      ``,
+      `Endpoints:`,
+      `  GET  /status        bridge health + connected add-in clients`,
+      `  GET  /tools         full tool catalog (JSON Schema) for LLM callers`,
+      `  GET  /tools/<name>  one tool`,
+      `  POST /op            execute one op          body: { kind, ... }`,
+      `  POST /ops           execute a batch of ops  body: [ {...}, ... ]`,
+      `  GET  /addin/taskpane.html   Office.js task pane served to Word`,
+      `  WS   /ws            task-pane connection (internal)`,
+      ``,
+      `Start with: curl http://127.0.0.1:${PORT}/tools | jq .`,
+      `LLM callers: read /tools, pick a tool, POST its example to /op.`,
+    ].join("\n"),
+  );
+});
+
 app.post("/op", async (req, res) => {
   try {
     const result = await sendOp(req.body);
@@ -114,4 +150,5 @@ httpServer.listen(PORT, "127.0.0.1", () => {
   console.log(`[wordbridge] listening on http://127.0.0.1:${PORT}`);
   console.log(`[wordbridge] task pane: http://127.0.0.1:${PORT}/addin/taskpane.html`);
   console.log(`[wordbridge] status:    http://127.0.0.1:${PORT}/status`);
+  console.log(`[wordbridge] tools:     http://127.0.0.1:${PORT}/tools`);
 });
