@@ -1,0 +1,17 @@
+{
+  "name": "wordbridge",
+  "version": "0.1.0",
+  "description": "Local bridge that applies live edits to Microsoft Word via an Office.js task-pane add-in.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "wordbridge": "./cli/wordbridge.js"
+  },
+  "scripts": {
+    "start": "node server/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  }
+}

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp
+  xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+  xsi:type="TaskPaneApp">
+  <Id>cba284a3-1eb0-4528-821b-2e4ad882348d</Id>
+  <Version>0.1.0.0</Version>
+  <ProviderName>apoudel6</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Word Bridge" />
+  <Description DefaultValue="Local bridge that applies programmatic edits to Word as tracked changes." />
+  <IconUrl DefaultValue="http://127.0.0.1:3001/addin/icon.png" />
+  <SupportUrl DefaultValue="http://127.0.0.1:3001/" />
+  <AppDomains>
+    <AppDomain>http://127.0.0.1:3001</AppDomain>
+    <AppDomain>http://localhost:3001</AppDomain>
+  </AppDomains>
+  <Hosts>
+    <Host Name="Document" />
+  </Hosts>
+  <DefaultSettings>
+    <SourceLocation DefaultValue="http://127.0.0.1:3001/addin/taskpane.html" />
+  </DefaultSettings>
+  <Permissions>ReadWriteDocument</Permissions>
+</OfficeApp>
