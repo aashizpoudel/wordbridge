@@ -3,7 +3,7 @@
 // Derive WS URL from the page origin so the task pane adapts to whichever
 // port served it — changing the bridge port only requires updating the
 // manifest SourceLocation (and a Word relaunch to pick it up).
-const WS_URL = `ws://${window.location.host}/ws`;
+const WS_URL = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
 let ws = null;
 let reconnectTimer = null;
 
@@ -52,9 +52,11 @@ function setTrackStatus(text, cls) {
 function connect() {
   if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
   setStatus("connecting…", "warn");
+  log("connecting to: " + WS_URL);
   try {
     ws = new WebSocket(WS_URL);
   } catch (err) {
+    log("WebSocket constructor error: " + (err.message || String(err)));
     setStatus("error", "err");
     scheduleReconnect();
     return;
@@ -69,7 +71,8 @@ function connect() {
     log("ws closed, retrying in 2s");
     scheduleReconnect();
   };
-  ws.onerror = () => {
+  ws.onerror = (ev) => {
+    log("ws error: " + JSON.stringify({type: ev.type, url: WS_URL}));
     setStatus("error", "err");
   };
   ws.onmessage = async (evt) => {

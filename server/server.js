@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import { bridgeInfo, tools, getToolByName } from "./tools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +20,17 @@ function resolvePort() {
   return 3001;
 }
 const PORT = resolvePort();
+
+function resolveHost() {
+  const argv = process.argv.slice(2);
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--host" && argv[i + 1]) return argv[i + 1];
+    if (argv[i].startsWith("--host=")) return argv[i].slice("--host=".length);
+  }
+  if (process.env.WORDBRIDGE_HOST) return process.env.WORDBRIDGE_HOST;
+  return "127.0.0.1";
+}
+const HOST = resolveHost();
 if (!Number.isInteger(PORT) || PORT <= 0 || PORT > 65535) {
   console.error(`[wordbridge] invalid port: ${PORT}`);
   process.exit(2);
@@ -35,6 +47,13 @@ app.use((req, res, next) => {
   next();
 });
 
+app.get("/addin/manifest.xml", (_req, res) => {
+  const proto = _req.get("x-forwarded-proto") || _req.protocol;
+  const origin = `${proto}://${_req.get("host")}`;
+  const xml = readFileSync(path.join(ADDIN_DIR, "manifest.xml"), "utf8")
+    .replaceAll("http://localhost:3001", origin);
+  res.type("application/xml").send(xml);
+});
 app.use("/addin", express.static(ADDIN_DIR));
 
 const httpServer = createServer(app);
@@ -103,6 +122,8 @@ app.get("/tools/:name", (req, res) => {
 });
 
 app.get("/", (_req, res) => {
+  const proto = _req.get("x-forwarded-proto") || _req.protocol;
+  const origin = `${proto}://${_req.get("host")}`;
   res.type("text/plain").send(
     [
       `wordbridge ${bridgeInfo.version} — Word live-editing bridge`,
@@ -116,7 +137,38 @@ app.get("/", (_req, res) => {
       `  GET  /addin/taskpane.html   Office.js task pane served to Word`,
       `  WS   /ws            task-pane connection (internal)`,
       ``,
-      `Start with: curl http://127.0.0.1:${PORT}/tools | jq .`,
+      `Word Add-in:`,
+      `  Manifest URL: ${origin}/addin/manifest.xml`,
+      ``,
+      `Sideload the add-in in Microsoft Word:`,
+      ``,
+      `  Option A — Upload via Word UI:`,
+      `    1. Open Word > Insert > Get Add-ins (or Add-ins > My Add-ins)`,
+      `    2. Click "Upload My Add-in" (under Manage My Add-ins or via the dropdown)`,
+      `    3. Browse and upload the manifest URL or downloaded manifest.xml`,
+      `    4. The Word Bridge task pane will appear on the right`,
+      ``,
+      `  Option B — Install via manifest folder (no UI needed):`,
+      ``,
+      `    macOS:`,
+      `      1. Create the wef folder if it does not exist:`,
+      `         mkdir -p ~/Library/Containers/com.microsoft.Word/Data/Documents/wef`,
+      `      2. Download the manifest into that folder:`,
+      `         curl -o ~/Library/Containers/com.microsoft.Word/Data/Documents/wef/manifest.xml \\`,
+      `              ${origin}/addin/manifest.xml`,
+      `      3. Restart Word — the add-in will appear in Insert > My Add-ins`,
+      ``,
+      `    Windows:`,
+      `      1. Create the WEF folder if it does not exist:`,
+      `         %LOCALAPPDATA%\\Microsoft\\Office\\16.0\\WEF\\`,
+      `      2. Save the manifest into that folder:`,
+      `         curl -o "%LOCALAPPDATA%\\Microsoft\\Office\\16.0\\WEF\\manifest.xml" ^`,
+      `              ${origin}/addin/manifest.xml`,
+      `      3. Restart Word — the add-in will appear in Insert > My Add-ins`,
+      ``,
+      `  The add-in connects to this server via WebSocket automatically.`,
+      ``,
+      `Start with: curl ${origin}/tools | jq .`,
       `LLM callers: read /tools, pick a tool, POST its example to /op.`,
     ].join("\n"),
   );
@@ -146,8 +198,12 @@ app.post("/ops", async (req, res) => {
   res.json({ ok: results.every((r) => r.ok !== false), results });
 });
 
-httpServer.listen(PORT, "127.0.0.1", () => {
-  console.log(`[wordbridge] listening on http://127.0.0.1:${PORT}`);
+httpServer.on("upgrade", (req, socket, head) => {
+  console.log("[http] upgrade request:", req.url, req.headers.upgrade);
+});
+
+httpServer.listen(PORT, HOST, () => {
+  console.log(`[wordbridge] listening on http://${HOST}:${PORT}`);
   console.log(`[wordbridge] task pane: http://127.0.0.1:${PORT}/addin/taskpane.html`);
   console.log(`[wordbridge] status:    http://127.0.0.1:${PORT}/status`);
   console.log(`[wordbridge] tools:     http://127.0.0.1:${PORT}/tools`);

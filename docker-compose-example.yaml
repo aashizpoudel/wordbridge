@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  wordbridge:
+    build: .
+   # networks:
+    #  - traefik
+    ports:
+      - "3001:3001"
+    environment:
+      - WORDBRIDGE_PORT=3001
+      - WORDBRIDGE_HOST=0.0.0.0
+   # labels:
+    #  - traefik.enable=true
+    #  - traefik.docker.network=traefik
+    #  - traefik.http.routers.wordbridge.entrypoints=websecure
+    #  - traefik.http.routers.wordbridge.rule=Host(`office.local`)
+    #  - traefik.http.routers.wordbridge.tls=true
+    #  - traefik.http.routers.wordbridge.tls.certResolver=letsencrypt
+    #  - traefik.http.services.wordbridge.loadbalancer.server.port=3001
+    restart: unless-stopped
+
+#networks:
+#  traefik:
+#    name: traefik
+#    external: true
