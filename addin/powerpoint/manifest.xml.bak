@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp
+  xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+  xsi:type="TaskPaneApp">
+  <Id>d3f7a1b2-5c94-4e68-9a3b-1f6d82e4c7a9</Id>
+  <Version>0.1.0.0</Version>
+  <ProviderName>apoudel6</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="PowerPoint Bridge" />
+  <Description DefaultValue="Local bridge that applies programmatic edits to PowerPoint presentations." />
+  <IconUrl DefaultValue="http://localhost:3001/addin/powerpoint/icon.png" />
+  <SupportUrl DefaultValue="http://localhost:3001/" />
+  <AppDomains>
+    <AppDomain>http://127.0.0.1:3001</AppDomain>
+    <AppDomain>http://localhost:3001</AppDomain>
+  </AppDomains>
+  <Hosts>
+    <Host Name="Presentation" />
+  </Hosts>
+  <DefaultSettings>
+    <SourceLocation DefaultValue="http://localhost:3001/addin/powerpoint/taskpane.html" />
+  </DefaultSettings>
+  <Permissions>ReadWriteDocument</Permissions>
+</OfficeApp>

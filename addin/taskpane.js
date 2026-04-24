@@ -64,7 +64,7 @@ function connect() {
   ws.onopen = () => {
     setStatus("connected", "ok");
     log("ws connected");
-    ws.send(JSON.stringify({ type: "hello", info: "Word task pane ready" }));
+    ws.send(JSON.stringify({ type: "hello", kind: "word", info: "Word task pane ready" }));
   };
   ws.onclose = () => {
     setStatus("disconnected", "warn");

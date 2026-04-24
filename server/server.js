@@ -5,10 +5,28 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
-import { bridgeInfo, tools, getToolByName } from "./tools.js";
+import { bridgeInfo, tools, getToolByName, getToolsByHost } from "./tools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ADDIN_DIR = path.resolve(__dirname, "..", "addin");
+
+// Random word list for client IDs
+const WORDS = [
+  "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
+  "india", "juliet", "kilo", "lima", "mike", "november", "oscar", "papa",
+  "quebec", "romeo", "sierra", "tango", "uniform", "victor", "whiskey",
+  "xray", "yankee", "zulu", "anchor", "breeze", "coral", "drift", "ember",
+  "flint", "grove", "haze", "ivory", "jade", "knot", "lumen", "maple",
+  "nexus", "opal", "prism", "quartz", "ridge", "spark", "tide", "umbra",
+  "vault", "wren", "zenith", "arrow", "bloom", "crest", "dusk", "fern",
+  "glyph", "haven", "isle", "jewel", "kayak", "lotus", "mirth", "nova",
+];
+
+function generateClientId() {
+  const w1 = WORDS[Math.floor(Math.random() * WORDS.length)];
+  const w2 = WORDS[Math.floor(Math.random() * WORDS.length)];
+  return `${w1}-${w2}`;
+}
 
 function resolvePort() {
   const argv = process.argv.slice(2);
@@ -47,6 +65,15 @@ app.use((req, res, next) => {
   next();
 });
 
+app.get("/addin/:app/manifest.xml", (req, res) => {
+  const sub = req.params.app;
+  const file = path.join(ADDIN_DIR, sub, "manifest.xml");
+  try { readFileSync(file); } catch { return res.status(404).json({ error: `no manifest for ${sub}` }); }
+  const proto = req.get("x-forwarded-proto") || req.protocol;
+  const origin = `${proto}://${req.get("host")}`;
+  const xml = readFileSync(file, "utf8").replaceAll("http://localhost:3001", origin);
+  res.type("application/xml").send(xml);
+});
 app.get("/addin/manifest.xml", (_req, res) => {
   const proto = _req.get("x-forwarded-proto") || _req.protocol;
   const origin = `${proto}://${_req.get("host")}`;
@@ -59,16 +86,36 @@ app.use("/addin", express.static(ADDIN_DIR));
 const httpServer = createServer(app);
 const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
 
-const clients = new Set();
+// Client registry: Map<clientId, { ws, kind, connectedAt }>
+const clients = new Map();
 const pending = new Map();
 
+function getClientsByKind(kind) {
+  const result = [];
+  for (const [id, client] of clients) {
+    if (client.kind === kind) result.push({ id, ...client });
+  }
+  return result;
+}
+
+function getClientById(clientId) {
+  return clients.get(clientId) || null;
+}
+
 wss.on("connection", (ws) => {
-  clients.add(ws);
-  console.log(`[ws] client connected (total=${clients.size})`);
+  const clientId = generateClientId();
+  const client = { ws, kind: null, connectedAt: new Date().toISOString() };
+  clients.set(clientId, client);
+  console.log(`[ws] client connected: ${clientId} (total=${clients.size})`);
+
+  // Send the assigned client ID to the add-in
+  ws.send(JSON.stringify({ type: "welcome", clientId }));
+
   ws.on("close", () => {
-    clients.delete(ws);
-    console.log(`[ws] client disconnected (total=${clients.size})`);
+    clients.delete(clientId);
+    console.log(`[ws] client disconnected: ${clientId} (total=${clients.size})`);
   });
+
   ws.on("message", (raw) => {
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
@@ -77,22 +124,48 @@ wss.on("connection", (ws) => {
       pending.delete(msg.id);
       resolve(msg);
     } else if (msg.type === "hello") {
-      console.log(`[ws] hello from add-in: ${msg.info || ""}`);
+      // Update client kind from hello message
+      if (msg.kind) {
+        client.kind = msg.kind;
+      }
+      console.log(`[ws] hello from ${clientId}: kind=${client.kind}, info=${msg.info || ""}`);
     } else if (msg.type === "log") {
-      console.log(`[addin] ${msg.text}`);
+      console.log(`[${clientId}] ${msg.text}`);
     }
   });
 });
 
-function sendOp(op, timeoutMs = 20000) {
+function sendOp(op, { clientId, kind, timeoutMs = 20000 } = {}) {
   return new Promise((resolve, reject) => {
-    if (clients.size === 0) {
-      return reject(new Error("no add-in connected — open the Word Bridge task pane in Word"));
+    // Resolve target client(s)
+    let targets = [];
+
+    if (clientId) {
+      const client = getClientById(clientId);
+      if (!client) return reject(new Error(`client not found: ${clientId}`));
+      targets = [client];
+    } else if (kind) {
+      targets = getClientsByKind(kind);
+      if (targets.length === 0) {
+        return reject(new Error(`no ${kind} add-in connected — open the Bridge task pane in ${kind}`));
+      }
+      // Send to the first matching client
+      targets = [targets[0]];
+    } else {
+      // No target specified — send to first available client
+      if (clients.size === 0) {
+        return reject(new Error("no add-in connected — open a Bridge task pane in an Office app"));
+      }
+      targets = [clients.values().next().value];
     }
+
     const id = randomUUID();
     const payload = JSON.stringify({ type: "op", id, op });
     pending.set(id, { resolve, reject });
-    for (const ws of clients) ws.send(payload);
+    for (const t of targets) {
+      const ws = t.ws || t;
+      ws.send(payload);
+    }
     setTimeout(() => {
       if (pending.has(id)) {
         pending.delete(id);
@@ -103,15 +176,25 @@ function sendOp(op, timeoutMs = 20000) {
 }
 
 app.get("/status", (_req, res) => {
-  res.json({ ok: true, connectedClients: clients.size, port: PORT });
+  const summary = { word: 0, excel: 0, powerpoint: 0, unknown: 0 };
+  const clientList = [];
+  for (const [id, client] of clients) {
+    const k = client.kind || "unknown";
+    summary[k] = (summary[k] || 0) + 1;
+    clientList.push({ clientId: id, kind: client.kind, connectedAt: client.connectedAt });
+  }
+  res.json({ ok: true, connectedClients: clients.size, summary, clients: clientList, port: PORT });
 });
 
-app.get("/tools", (_req, res) => {
+app.get("/tools", (req, res) => {
+  const host = typeof req.query.host === "string" ? req.query.host : undefined;
+  const filtered = getToolsByHost(host);
   res.json({
     ...bridgeInfo,
     baseUrl: `http://127.0.0.1:${PORT}`,
-    toolCount: tools.length,
-    tools,
+    host: host || undefined,
+    toolCount: filtered.length,
+    tools: filtered,
   });
 });
 
@@ -124,59 +207,25 @@ app.get("/tools/:name", (req, res) => {
 app.get("/", (_req, res) => {
   const proto = _req.get("x-forwarded-proto") || _req.protocol;
   const origin = `${proto}://${_req.get("host")}`;
-  res.type("text/plain").send(
-    [
-      `wordbridge ${bridgeInfo.version} — Word live-editing bridge`,
-      ``,
-      `Endpoints:`,
-      `  GET  /status        bridge health + connected add-in clients`,
-      `  GET  /tools         full tool catalog (JSON Schema) for LLM callers`,
-      `  GET  /tools/<name>  one tool`,
-      `  POST /op            execute one op          body: { kind, ... }`,
-      `  POST /ops           execute a batch of ops  body: [ {...}, ... ]`,
-      `  GET  /addin/taskpane.html   Office.js task pane served to Word`,
-      `  WS   /ws            task-pane connection (internal)`,
-      ``,
-      `Word Add-in:`,
-      `  Manifest URL: ${origin}/addin/manifest.xml`,
-      ``,
-      `Sideload the add-in in Microsoft Word:`,
-      ``,
-      `  Option A — Upload via Word UI:`,
-      `    1. Open Word > Insert > Get Add-ins (or Add-ins > My Add-ins)`,
-      `    2. Click "Upload My Add-in" (under Manage My Add-ins or via the dropdown)`,
-      `    3. Browse and upload the manifest URL or downloaded manifest.xml`,
-      `    4. The Word Bridge task pane will appear on the right`,
-      ``,
-      `  Option B — Install via manifest folder (no UI needed):`,
-      ``,
-      `    macOS:`,
-      `      1. Create the wef folder if it does not exist:`,
-      `         mkdir -p ~/Library/Containers/com.microsoft.Word/Data/Documents/wef`,
-      `      2. Download the manifest into that folder:`,
-      `         curl -o ~/Library/Containers/com.microsoft.Word/Data/Documents/wef/manifest.xml \\`,
-      `              ${origin}/addin/manifest.xml`,
-      `      3. Restart Word — the add-in will appear in Insert > My Add-ins`,
-      ``,
-      `    Windows:`,
-      `      1. Create the WEF folder if it does not exist:`,
-      `         %LOCALAPPDATA%\\Microsoft\\Office\\16.0\\WEF\\`,
-      `      2. Save the manifest into that folder:`,
-      `         curl -o "%LOCALAPPDATA%\\Microsoft\\Office\\16.0\\WEF\\manifest.xml" ^`,
-      `              ${origin}/addin/manifest.xml`,
-      `      3. Restart Word — the add-in will appear in Insert > My Add-ins`,
-      ``,
-      `  The add-in connects to this server via WebSocket automatically.`,
-      ``,
-      `Start with: curl ${origin}/tools | jq .`,
-      `LLM callers: read /tools, pick a tool, POST its example to /op.`,
-    ].join("\n"),
-  );
+  const template = readFileSync(path.join(__dirname, "index.md"), "utf8");
+  const body = template
+    .replaceAll("{{origin}}", origin)
+    .replaceAll("{{version}}", bridgeInfo.version);
+  res.type("text/plain").send(body);
 });
+
+function inferHost(op) {
+  if (!op || !op.kind) return undefined;
+  const t = getToolByName(op.kind);
+  if (!t) return undefined;
+  return t.host && t.host !== "any" ? t.host : undefined;
+}
 
 app.post("/op", async (req, res) => {
   try {
-    const result = await sendOp(req.body);
+    const { clientId, target, ...op } = req.body;
+    const kind = target || inferHost(op);
+    const result = await sendOp(op, { clientId, kind });
     res.json(result);
   } catch (err) {
     res.status(502).json({ ok: false, error: err.message });
@@ -184,12 +233,17 @@ app.post("/op", async (req, res) => {
 });
 
 app.post("/ops", async (req, res) => {
-  const ops = Array.isArray(req.body) ? req.body : req.body?.ops;
-  if (!Array.isArray(ops)) return res.status(400).json({ ok: false, error: "body must be an array of ops or { ops: [...] }" });
+  const body = req.body;
+  const ops = Array.isArray(body) ? body : body?.ops;
+  const clientId = body?.clientId;
+  const target = body?.target;
+  if (!Array.isArray(ops)) return res.status(400).json({ ok: false, error: "body must be an array of ops or { ops: [...], clientId?, target? }" });
   const results = [];
   for (const op of ops) {
     try {
-      results.push(await sendOp(op));
+      const opClientId = op.clientId || clientId;
+      const opTarget = op.target || target || inferHost(op);
+      results.push(await sendOp(op, { clientId: opClientId, kind: opTarget }));
     } catch (err) {
       results.push({ ok: false, error: err.message, op });
       if (req.query.stopOnError === "1") break;

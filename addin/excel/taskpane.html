@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>Excel Bridge</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+      body { font-family: -apple-system, Segoe UI, sans-serif; font-size: 13px; margin: 12px; color: #222; }
+      h1 { font-size: 15px; margin: 0 0 8px; }
+      .row { margin: 6px 0; }
+      .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+      .ok { background: #d8f5d0; color: #115c1c; }
+      .warn { background: #fff2c2; color: #6a4b00; }
+      .err { background: #fdd; color: #8a0000; }
+      #log { margin-top: 10px; height: 240px; overflow: auto; border: 1px solid #ddd; background: #fafafa; padding: 6px; font-family: Menlo, monospace; font-size: 11px; white-space: pre-wrap; }
+      button { font-size: 12px; padding: 4px 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Excel Bridge</h1>
+    <div class="row">Bridge: <span id="status" class="pill warn">connecting…</span></div>
+    <div class="row">
+      <button id="pingBtn">Ping bridge</button>
+      <button id="clearLogBtn">Clear log</button>
+    </div>
+    <div id="log"></div>
+    <script src="taskpane.js"></script>
+  </body>
+</html>

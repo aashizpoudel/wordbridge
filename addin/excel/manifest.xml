@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp
+  xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+  xsi:type="TaskPaneApp">
+  <Id>a7e2c5d8-3b16-49f0-8d4a-6e9f01b3c582</Id>
+  <Version>0.1.0.0</Version>
+  <ProviderName>apoudel6</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Excel Bridge" />
+  <Description DefaultValue="Local bridge that applies programmatic edits to Excel workbooks." />
+  <IconUrl DefaultValue="http://localhost:3001/addin/excel/icon.png" />
+  <SupportUrl DefaultValue="http://localhost:3001/" />
+  <AppDomains>
+    <AppDomain>http://127.0.0.1:3001</AppDomain>
+    <AppDomain>http://localhost:3001</AppDomain>
+  </AppDomains>
+  <Hosts>
+    <Host Name="Workbook" />
+  </Hosts>
+  <DefaultSettings>
+    <SourceLocation DefaultValue="http://localhost:3001/addin/excel/taskpane.html" />
+  </DefaultSettings>
+  <Permissions>ReadWriteDocument</Permissions>
+</OfficeApp>
